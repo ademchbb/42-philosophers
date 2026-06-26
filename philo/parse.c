@@ -6,7 +6,7 @@
 /*   By: adchebbi <adchebbi@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/06/26 14:02:53 by adchebbi          #+#    #+#             */
-/*   Updated: 2026/06/26 16:07:25 by adchebbi         ###   ########.fr       */
+/*   Updated: 2026/06/26 19:33:48 by adchebbi         ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -70,7 +70,7 @@ static int	parse_main_four(char **argv, t_table *table)
 	if (parse_one(argv[2], &table->time_to_die) || table->time_to_die < 1)
 		return (err("bad time_to_die"));
 	if (parse_one(argv[3], &table->time_to_eat) || table->time_to_eat < 1)
-		return (err("bas time_to_eat"));
+		return (err("bad time_to_eat"));
 	if (parse_one(argv[4], &table->time_to_sleep) || table->time_to_sleep < 1)
 		return (err("bad time_to_sleep"));
 	return (0);
