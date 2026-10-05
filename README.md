@@ -2,155 +2,129 @@
 
 # Philosophers
 
-## Description
+> The dining philosophers problem in C with POSIX threads: one thread per philosopher, one mutex per fork,
+> a monitor that detects starvation in under 10 ms. No deadlocks, no data races, no leaks.
 
-Philosophers is a 42 project about **multithreading** and **synchronization**. It implements
-the classic *dining philosophers* problem.
+![42 score](https://img.shields.io/badge/42%20score-100%2F100-success) ![C](https://img.shields.io/badge/language-C-00599C) ![pthreads](https://img.shields.io/badge/POSIX-threads%20%26%20mutexes-informational) ![42 Paris](https://img.shields.io/badge/school-42%20Paris-000000)
 
-One or more philosophers sit around a round table with a large bowl of spaghetti in the middle.
-Each philosopher repeatedly **eats**, **sleeps** and **thinks**. There are as many **forks** as
-philosophers, placed **between** each pair of neighbours, and a philosopher needs **two forks**
-(the one on their left and the one on their right) to eat. Two neighbours can therefore never
-eat at the same time, since they share a fork.
-
-Philosophers do not talk to each other and do not know what the others are doing. A philosopher
-who does not start eating in time **dies of starvation**. The goal of the program is to
-**keep every philosopher alive** for as long as the timing values allow, and to report a death
-immediately if one happens.
-
-The simulation is built with the constraints of the subject in mind:
-
-- each philosopher is a separate **thread**;
-- each fork is protected by its own **mutex**;
-- a dedicated **monitor** detects starvation;
-- there are **no global variables**, no data races and no memory leaks.
-
-## Instructions
-
-### Build
-
-```bash
-make        # builds the "philo" executable
-make clean  # removes the object files
-make fclean # removes the object files and the executable
-make re     # rebuilds everything from scratch
+```console
+$ ./philo 5 800 200 200 7
+0 1 has taken a fork
+0 1 has taken a fork
+0 1 is eating
+0 3 has taken a fork
+...
 ```
 
-The project is compiled with `cc -Wall -Wextra -Werror -pthread`.
+## Highlights
 
-### Run
+- **Deadlock-free by design**: fork-locking order depends on parity, so the circular wait can never form.
+- **Race-free**: every shared value (forks, stop flag, last meal time, meal count, output) is behind a mutex.
+  Checked with Valgrind's **Helgrind** (0 errors).
+- **Timing precision**: a dedicated monitor checks every philosopher every 0.5 ms, and a custom `precise_sleep`
+  replaces imprecise long `usleep` calls.
+- **Robust**: input validation, single-philosopher edge case, clean shutdown even if `pthread_create` fails.
+  **Memcheck** reports 0 leaks.
+
+## The problem
+
+N philosophers sit around a table, with one fork between each pair of neighbors. To eat, a philosopher needs
+both adjacent forks. Each one loops eat → sleep → think, and dies if they do not start eating within
+`time_to_die` ms of their last meal. The program must keep everyone alive when the timings allow it, and
+report a death within 10 ms when it happens.
+
+## Build & Run
 
 ```bash
+cd philo
+make
 ./philo number_of_philosophers time_to_die time_to_eat time_to_sleep [number_of_times_each_philosopher_must_eat]
 ```
 
 | Argument | Meaning |
 |---|---|
-| `number_of_philosophers` | Number of philosophers (and of forks). Must be between 1 and 200. |
-| `time_to_die` (ms) | If a philosopher does not start eating within this delay since the start of their last meal (or since the start of the simulation), they die. |
-| `time_to_eat` (ms) | Time a philosopher spends eating, holding both forks. |
-| `time_to_sleep` (ms) | Time a philosopher spends sleeping. |
-| `[number_of_times_each_philosopher_must_eat]` | Optional. When every philosopher has eaten at least this many times, the simulation stops. Otherwise it stops when a philosopher dies. |
+| `number_of_philosophers` | 1 to 200 (also the number of forks) |
+| `time_to_die` (ms) | Max delay between the start of two meals (or since the start of the simulation) |
+| `time_to_eat` (ms) | Time spent eating, holding both forks |
+| `time_to_sleep` (ms) | Time spent sleeping |
+| `must_eat` (optional) | Stop once every philosopher has eaten this many times |
 
-### Examples
+Output format: `timestamp_ms philosopher_id action`. Messages never overlap.
 
-```bash
-./philo 5 800 200 200        # 5 philosophers; runs until someone dies
-./philo 5 800 200 200 7      # stops once every philosopher has eaten 7 times
-./philo 1 800 200 200        # a single philosopher cannot eat and dies
-./philo 4 410 200 200        # nobody should die with these values
-```
+## Test results
 
-### Output format
+| Command | Expected | Result |
+|---|---|---|
+| `./philo 1 800 200 200` | dies (only one fork) | `801 1 died` ✅ |
+| `./philo 4 410 200 200` | nobody dies | no death over the run ✅ |
+| `./philo 5 800 200 200` | nobody dies | no death over the run ✅ |
+| `./philo 4 310 200 100` | one death | `311 1 died` ✅ |
+| `./philo 5 800 200 200 7` | stops after 7 meals each | clean stop, no death ✅ |
+| `./philo 200 800 200 200` | nobody dies | no death over the run ✅ |
+| `./philo 201 …`, `./philo 5 800 abc 200` | error | rejected with message, exit 1 ✅ |
+| `valgrind --tool=helgrind` | no data race | 0 errors ✅ |
+| `valgrind --leak-check=full` | no leak | 0 leaks ✅ |
 
-Every state change is printed as `timestamp_in_ms  philosopher_id  action`:
+## How it works
 
-```
-0 1 has taken a fork
-0 1 has taken a fork
-0 1 is eating
-200 1 is sleeping
-400 1 is thinking
-810 3 died
-```
-
-State messages never overlap (they are protected by a mutex), and a death is announced **less
-than 10 ms** after it actually happens.
+- **One thread per philosopher, one mutex per fork.** Taking a fork means locking its mutex.
+- **Breaking the circular wait.** If everyone grabbed their left fork at once, they would all wait forever for
+  the right one. Instead, **even** philosophers take their **right** fork first and **odd** philosophers their
+  **left** fork first. Two neighbors compete for the same first fork, so the loser holds nothing.
+- **Independent monitor.** The main thread scans all philosophers every 0.5 ms, comparing `now - last_meal` to
+  `time_to_die`, and also counts meals when `must_eat` is set.
+- **Protected state.** Separate mutexes for the forks, printing, the stop flag, and each philosopher's meal data,
+  which the philosopher writes and the monitor reads.
+- **Precise sleep.** `precise_sleep` sleeps in short steps while checking the clock and the stop flag, so a
+  philosopher reacts quickly when the simulation ends.
+- **Single philosopher.** Both "forks" would be the same mutex, so this case is handled separately.
+- **Safe shutdown.** `launched_count` tracks how many threads were really created, so a failed
+  `pthread_create` only joins existing threads before destroying mutexes and freeing memory.
 
 ## Project structure
 
 ```
-rew_philo/
-├── Makefile
-├── README.md
-├── test.sh
-├── includes/
-│   └── philo.h              # t_philo / t_table structures + prototypes
-└── src/
-    ├── main.c               # entry point: init, launch, monitor, cleanup
-    ├── parsing/
-    │   └── parse.c          # argument validation and parsing
-    ├── init/
-    │   ├── init.c           # allocation, mutex init, thread creation
-    │   └── cleanup.c        # join threads, destroy mutexes, free memory
-    ├── simulation/
-    │   ├── routine.c        # a philosopher's life (eat / sleep / think)
-    │   ├── forks.c          # taking and releasing forks (deadlock-free order)
-    │   └── monitor.c        # death detection and meal counting
-    └── utils/
-        ├── time.c           # millisecond timestamps and precise sleep
-        ├── state.c          # protected read/write of the stop flag
-        └── log.c            # protected printing of states and deaths
+philo/
+├── Makefile      # cc -Wall -Wextra -Werror -pthread
+├── philo.h       # t_philo / t_table structures and prototypes
+├── main.c        # init, launch threads, run monitor, cleanup
+├── parse.c       # argument validation
+├── init.c        # allocation, mutex init, thread creation
+├── routine.c     # a philosopher's life: eat / sleep / think
+├── forks.c       # deadlock-free fork locking order
+├── monitor.c     # death detection and meal counting
+├── state.c       # protected read/write of the stop flag
+├── log.c         # protected printing
+├── time.c        # millisecond clock and precise sleep
+└── cleanup.c     # join threads, destroy mutexes, free memory
 ```
-
-## Technical choices
-
-- **One thread per philosopher, one mutex per fork.** Taking a fork means locking its mutex,
-  releasing it means unlocking it, so a fork is never held by two philosophers at once.
-- **Deadlock prevention.** If every philosopher grabbed their left fork at the same time, each
-  would wait forever for the right one. To break this circular wait, the locking order depends on
-  parity: **even** philosophers take their **right** fork first, **odd** philosophers take their
-  **left** fork first. Two neighbours then compete for the same fork first, so the loser holds
-  nothing and the waiting cycle can never form.
-- **Independent monitor.** A busy philosopher cannot watch itself, so a separate monitor scans
-  every philosopher every 0.5 ms and compares `now - last_meal` to `time_to_die`. This frequency
-  guarantees a death is reported in well under 10 ms.
-- **Protected shared data.** Mutexes guard the forks, the printing, the stop flag, and each
-  philosopher's meal data (last-meal timestamp and meal count) which is written by the
-  philosopher and read by the monitor.
-- **Precise sleep.** `precise_sleep` sleeps in small steps while checking the real clock and the
-  stop flag, instead of a single imprecise `usleep`.
-- **Single philosopher.** With only one philosopher both forks are the same one, so this case is
-  handled separately to avoid locking the same mutex twice; the philosopher dies as expected.
-- **Robust shutdown.** `launched_count` records how many threads were actually created, so on a
-  failed `pthread_create` only the existing threads are joined before mutexes are destroyed and
-  memory is freed.
 
 ## Resources
 
-Classic references about the topic:
+- E. W. Dijkstra, *Hierarchical ordering of sequential processes* (origin of the problem)
+- [Dining philosophers problem](https://en.wikipedia.org/wiki/Dining_philosophers_problem) on Wikipedia
+- [POSIX Threads Programming](https://hpc-tutorials.llnl.gov/posix/), LLNL tutorial
+- Man pages: `pthread_create`, `pthread_join`, `pthread_mutex_init`, `pthread_mutex_lock`, `gettimeofday`, `usleep`
 
-- E. W. Dijkstra, *Hierarchical ordering of sequential processes* (the original dining
-  philosophers problem).
-- *The Dining Philosophers Problem* — Wikipedia: https://en.wikipedia.org/wiki/Dining_philosophers_problem
-- POSIX threads manual pages: `man pthread_create`, `man pthread_mutex_init`,
-  `man pthread_mutex_lock`, `man pthread_join`, `man gettimeofday`, `man usleep`.
-- *POSIX Threads Programming* — LLNL tutorial:
-  https://hpc-tutorials.llnl.gov/posix/
+### AI usage
 
-### Use of AI
+An AI assistant (Claude) was used as a **learning and pair-programming tool** to:
 
-An AI assistant (Claude) was used as a **learning and pair-programming tool** while building this
-project. Specifically, it was used to:
+- **understand the concepts**: threads, mutexes, data races, deadlocks, and the problem itself;
+- **design the architecture**: thread-per-philosopher, mutex-per-fork, separate monitor;
+- **reason about correctness**: deadlock-free locking order, protected meal data, single-philosopher case;
+- **write and review the C code**, and **interpret** `valgrind` and `helgrind` reports.
 
-- **understand the concepts**: threads, mutexes, data races, deadlocks, and the dining
-  philosophers problem itself;
-- **design the architecture**: the thread-per-philosopher / mutex-per-fork model, the separate
-  monitor, and the split of the code into `parsing`, `init`, `simulation` and `utils`;
-- **reason about correctness**: the deadlock-free fork-locking order, the protection of the
-  shared meal data, and the single-philosopher edge case;
-- **write and review the C code**, and **interpret the results** of `valgrind` (memory leaks)
-  and `valgrind --tool=helgrind` (data races).
+Every function and design decision was explained, reviewed and understood before being kept, so the project
+can be defended line by line.
 
-Every function and every design decision was explained, reviewed and understood by me before
-being kept, so that the whole project can be defended line by line.
+## 42 evaluation
+
+Validated at **100/100** by 3 peer evaluations.
+Other students' names and photos are blurred.
+
+<p align="center"><img src="assets/42_evaluation.png" alt="42 intra evaluation page" width="620"></p>
+
+## Author
+
+**Adem Chebbi** ([@ademchbb](https://github.com/ademchbb)), 42 login `adchebbi`

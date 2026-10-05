@@ -1,0 +1,14 @@
+# Build artifacts
+*.o
+*.a
+*.d
+obj/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
+
+# Binary
+philo/philo
